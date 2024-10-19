@@ -1,103 +1,98 @@
-import React, { useRef, useEffect, useState, useCallback } from "react";
-import { useSockJS } from "../hooks/useSockJS";
+import React, { useEffect, useState } from "react";
+import io, { Socket } from "socket.io-client";
+import axios from "axios";
+import ColorPalette from "./ColorPalette";
 
-interface CanvasProps {
-  width: number;
-  height: number;
-}
-
-const Canvas: React.FC<CanvasProps> = ({ width, height }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [selectedColor, setSelectedColor] = useState("#000000");
-  const [scale, setScale] = useState(0.5); // 초기 스케일을 0.5로 설정
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [lastPosition, setLastPosition] = useState({ x: 0, y: 0 });
-  const { sendMessage } = useSockJS();
-
-  const drawPixel = useCallback((x: number, y: number, color: string) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, 1, 1);
-  }, []);
+const Canvas: React.FC = () => {
+  const [canvasData, setCanvasData] = useState<string[][]>(
+    Array(64)
+      .fill(null)
+      .map(() => Array(64).fill("#ffffff"))
+  ); // 초기화된 빈 캔버스
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [selectedColor, setSelectedColor] = useState("#000000"); // 기본 색상
+  const [error, setError] = useState<string>(""); // 에러 메시지 상태
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    // 소켓 연결 설정
+    const newSocket = io("http://localhost:3000", {
+      withCredentials: true, // 쿠키 기반 인증을 위해 설정
+    });
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    newSocket.on("connect", () => {
+      console.log("Connected to server");
+      newSocket.emit("authenticate"); // 쿠키를 통해 자동 인증
+    });
 
-    // 초기 캔버스 설정
-    ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(0, 0, width, height);
+    newSocket.on("authenticated", (isAuthenticated: boolean) => {
+      if (isAuthenticated) {
+        newSocket.emit("getCanvas");
+      } else {
+        console.log("Authentication failed");
+        setError("Authentication failed. Please log in again.");
+      }
+    });
 
-    // 여기에 서버에서 초기 캔버스 상태를 가져오는 로직을 추가할 수 있습니다.
-  }, [width, height]);
+    newSocket.on("canvasData", (data) => {
+      setCanvasData((prevCanvas) => {
+        const updatedCanvas = prevCanvas.map((row) => [...row]);
+        data.pixels.forEach(
+          (pixel: { x: number; y: number; color: string }) => {
+            updatedCanvas[pixel.y][pixel.x] = pixel.color;
+          }
+        );
+        return updatedCanvas;
+      });
+    });
 
-  const handleCanvasClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    newSocket.on(
+      "pixelUpdated",
+      (pixel: { x: number; y: number; color: string }) => {
+        setCanvasData((prevCanvas) => {
+          const updatedCanvas = prevCanvas.map((row) => [...row]);
+          updatedCanvas[pixel.y][pixel.x] = pixel.color;
+          return updatedCanvas;
+        });
+      }
+    );
 
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((event.clientX - rect.left) / scale) - offset.x;
-    const y = Math.floor((event.clientY - rect.top) / scale) - offset.y;
+    setSocket(newSocket);
 
-    if (x >= 0 && x < width && y >= 0 && y < height) {
-      drawPixel(x, y, selectedColor);
-      sendMessage({ x, y, color: selectedColor });
+    return () => {
+      newSocket.close();
+    };
+  }, []);
+
+  const handleCanvasClick = (x: number, y: number) => {
+    if (socket) {
+      socket.emit("updatePixel", { x, y, color: selectedColor });
+    } else {
+      setError("Socket connection not established. Please try again.");
     }
-  };
-
-  const handleWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
-    event.preventDefault();
-    const newScale = scale * (event.deltaY > 0 ? 0.9 : 1.1);
-    setScale(Math.max(0.1, Math.min(newScale, 5))); // 스케일 제한
-  };
-
-  const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    setIsDragging(true);
-    setLastPosition({ x: event.clientX, y: event.clientY });
-  };
-
-  const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDragging) return;
-
-    const dx = event.clientX - lastPosition.x;
-    const dy = event.clientY - lastPosition.y;
-
-    setOffset((prev) => ({ x: prev.x + dx / scale, y: prev.y + dy / scale }));
-    setLastPosition({ x: event.clientX, y: event.clientY });
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
   };
 
   return (
     <div>
-      <canvas
-        ref={canvasRef}
-        width={width}
-        height={height}
-        onClick={handleCanvasClick}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        style={{
-          border: "1px solid #000",
-          transform: `scale(${scale})`,
-          transformOrigin: "top left",
-          cursor: isDragging ? "grabbing" : "grab",
-        }}
-      />
+      <h1>Canvas</h1>
+      {error && <p style={{ color: "red" }}>{error}</p>}
+      <ColorPalette onColorSelect={setSelectedColor} />
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(64, 10px)` }}>
+        {canvasData.map((row, y) =>
+          row.map((color, x) => (
+            <div
+              key={`${x}-${y}`}
+              onClick={() => handleCanvasClick(x, y)}
+              style={{
+                width: "10px",
+                height: "10px",
+                backgroundColor: color,
+                border: "1px solid #ddd",
+                boxSizing: "border-box",
+              }}
+            />
+          ))
+        )}
+      </div>
     </div>
   );
 };

@@ -1,18 +1,73 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import axios from "axios";
+import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google";
 import Canvas from "./components/Canvas";
-import ColorPalette from "./components/ColorPalette";
 
 const App: React.FC = () => {
-  const [selectedColor, setSelectedColor] = useState("#000000");
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    axios
+      .get("http://localhost:3000/auth/authenticate", {
+        withCredentials: true,
+      })
+      .then((response) => {
+        if (response.status === 200) {
+          setIsAuthenticated(true);
+        }
+      })
+      .catch((error) => {
+        console.error("Authentication check failed:", error);
+      });
+  }, []);
+
+  const handleLoginSuccess = async (credentialResponse: any) => {
+    const idToken = credentialResponse.credential;
+
+    try {
+      const response = await axios.post(
+        "http://localhost:3000/auth/google-login",
+        { token: idToken },
+        { withCredentials: true } // 쿠키를 포함한 요청
+      );
+
+      if (response.data.success) {
+        setIsAuthenticated(true);
+      }
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = () => {
+    axios
+      .get("http://localhost:3000/auth/logout", { withCredentials: true })
+      .then((response) => {
+        if (response.status === 200) {
+          setIsAuthenticated(false);
+        }
+      })
+      .catch((error) => console.error("Logout failed:", error));
+  };
 
   return (
-    <div style={{ textAlign: "center" }}>
-      <h1>Pixel Art Collaborator (1024x1024)</h1>
-      <ColorPalette onColorSelect={setSelectedColor} />
-      <div style={{ overflow: "hidden", width: "100%", height: "80vh" }}>
-        <Canvas width={1024} height={1024} />
+    <GoogleOAuthProvider clientId={import.meta.env.VITE_GOOGLE_CLIENT_ID}>
+      <div>
+        {isAuthenticated ? (
+          <>
+            <button onClick={handleLogout}>Logout</button>
+            <Canvas />
+          </>
+        ) : (
+          <div>
+            <GoogleLogin
+              onSuccess={handleLoginSuccess}
+              onError={() => console.log("Login Failed")}
+            />
+          </div>
+        )}
       </div>
-    </div>
+    </GoogleOAuthProvider>
   );
 };
 
